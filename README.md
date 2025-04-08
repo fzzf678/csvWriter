@@ -1,2 +1,2 @@
 # csvWriter
-A too to generate data and write to s3 directly
+A tool to generate data and write to s3 directly
