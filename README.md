@@ -126,4 +126,4 @@ go run main.go -tableInfo=./table_info.csv -pkBegin=0 -pkEnd=50000 -rowNumPerFil
 
 ## TODO
 1. Make this tool concurrency friendly. Since the random pkg has some lock problem, concurrency is inefficient in a golang program.
-2. Make this tool standalone.
+~~2. Make this tool standalone.~~
