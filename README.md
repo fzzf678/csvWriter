@@ -8,7 +8,7 @@ If you want to create data quickly and utilize machine resources, it is recommen
 
 ## How fast can this script generate data
 It depends on the machine resources, the generator/writer parameters and the line width of your schema.
-According to the test, it takes about 30 minutes to generate 1 TiB data to S3 with 16 cores and 32G memory machine.
+According to the test, it takes about 30 minutes to generate 1 TiB data to S3 with one 16 cores and 32G memory machine.
 
 ## How to use
 
