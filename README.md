@@ -7,7 +7,7 @@ This tool can generate data and write directly into S3(GCS, AWS S3, KS3, etc.).
 If you want to create data quickly and utilize machine resources, it is recommended to prepare multiple commands and then run this tool concurrently.
 
 ## How fast can this script generate data
-It depends on the machine resources, the generator/writer parameters and the line width of your schema.
+It depends on the machine resources, number of machines, the generator/writer parameters and the line width of your schema.
 According to the test, it takes about 30 minutes to generate 1 TiB data to S3 with one 16 cores and 32G memory machine.
 
 ## How to use
