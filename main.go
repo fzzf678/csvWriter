@@ -136,7 +136,13 @@ func loadSchemaInfoFromCSV(filename string) []*Column {
 			Type:     supportedTypes[strings.ToLower(colInfo[1])],
 			IsPK:     strings.ToLower(colInfo[2]) == "1",
 			IsUnique: strings.ToLower(colInfo[3]) == "1",
-			Order:    orderMap[strings.ToLower(colInfo[9])],
+		}
+		if len(strings.ToLower(colInfo[9])) != 0 {
+			if od, ok := orderMap[strings.ToLower(colInfo[9])]; !ok {
+				panic(fmt.Sprintf("Unsupported order: %s, please confirm your schema info", colInfo[9]))
+			} else {
+				columns[i].Order = od
+			}
 		}
 		var err error
 
