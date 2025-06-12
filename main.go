@@ -52,6 +52,7 @@ var (
 	s3Region    = flag.String("s3Region", "", "S3 region")
 	s3Provider  = flag.String("s3Provider", "", "S3 provider")
 	s3Endpoint  = flag.String("s3Endpoint", "", "S3 endpoint")
+	s3RoleARN   = flag.String("s3RoleARN", "", "S3 RoleARN")
 )
 
 const (
@@ -748,6 +749,7 @@ func generateData() {
 		SecretAccessKey: *s3SecretKey,
 		Provider:        *s3Provider,
 		Endpoint:        *s3Endpoint,
+		RoleARN:         *s3RoleARN,
 	}}
 	s, err := storage.ParseBackend(*s3Path, &op)
 	if err != nil {
