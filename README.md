@@ -12,6 +12,10 @@ According to the test, it takes about 30 minutes to generate 1 TiB data to S3 wi
 
 ## How to use
 
+### Step 0. Environment
+- Make sure you have a golang environment, and the `go` command is available in your PATH.
+- Make sure you have a S3 compatible storage, such as AWS S3, GCS, KS3, etc, and you can access the s3 storage with AKSK, credential file, or environment variables.
+
 ### Step 1. Prepare your table info
 This tool uses a csv configuration file to define the schema information required for data generation. Before generating data, please convert your table structure into this configuration format.
 
