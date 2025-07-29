@@ -500,7 +500,10 @@ func showFiles() {
 
 func glanceFiles(fileName string) {
 	store := createExternalStorage()
-	r, _ := store.Open(context.Background(), fileName, nil)
+	r, err := store.Open(context.Background(), fileName, nil)
+	if err != nil {
+		panic(fmt.Errorf("failed to open file %s: %v", fileName, err))
+	}
 	b := make([]byte, 1*units.MiB)
 	r.Read(b)
 	fmt.Println(string(b))
