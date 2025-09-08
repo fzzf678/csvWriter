@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/docker/go-units"
-	"github.com/google/uuid"
 	"log"
 	"math"
 	"math/rand"
@@ -22,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/docker/go-units"
+	"github.com/google/uuid"
 	"github.com/pingcap/tidb/br/pkg/storage"
 )
 
@@ -43,6 +43,7 @@ var (
 	pkBegin             = flag.Int("pkBegin", 0, "Begin of primary key, [begin, end)")
 	pkEnd               = flag.Int("pkEnd", 10, "End of primary key [begin, end)")
 	base64Encode        = flag.Bool("base64Encode", false, "Base64 encode the CSV file")
+	useProcessor        = flag.Bool("useProcessor", false, "use the processor impl to avoid OOM")
 	generatorNum        = flag.Int("generatorNum", 1, "Number of generator goroutines")
 	writerNum           = flag.Int("writerNum", 8, "Number of writer goroutines")
 
@@ -594,9 +595,11 @@ func deleteAllFilesByPrefix(prefix string) {
 
 // Task represents a task with a [begin, end) range indicating the number of rows to generate
 type Task struct {
-	id       int
+	id int
+	// [begin, end)
 	begin    int
 	end      int
+	curr     int
 	cols     []*Column
 	fileName string
 	rng      *rand.Rand
@@ -850,7 +853,10 @@ func main() {
 		fetchFileFromS3(*fetchFile)
 		return
 	}
-
+	if *useProcessor {
+		genWithTaskProcessor()
+		return
+	}
 	prepareRand()
 	generateData()
 }
