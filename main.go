@@ -724,8 +724,8 @@ func generateData() {
 	log.Printf("Total tasks: %d, each task generates at most %d rows", taskCount, *rowNumPerFile)
 
 	// Create tasks and results channels
-	tasksCh := make(chan Task, *writerNum*2)
-	resultsCh := make(chan Result, *writerNum*2)
+	tasksCh := make(chan Task, *generatorNum+1)
+	resultsCh := make(chan Result, *writerNum+1)
 
 	// Create a sync.Pool for reusing [][]string slices, initial capacity equals number of columns
 	pool := &sync.Pool{
