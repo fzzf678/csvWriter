@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore"
+	"github.com/pingcap/tidb/pkg/objstore/objectio"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/util"
 )
 
@@ -33,15 +35,15 @@ func genWithTaskProcessor() {
 	taskCount := (rowCount + *rowNumPerFile - 1) / *rowNumPerFile
 	log.Printf("Total tasks: %d, each task generates at most %d rows", taskCount, *rowNumPerFile)
 
-	u, err := storage.ParseRawURL(*s3Path)
+	u, err := objstore.ParseRawURL(*s3Path)
 	if err != nil {
 		panic(err)
 	}
-	s, err := storage.ParseBackendFromURL(u, nil)
+	s, err := objstore.ParseBackendFromURL(u, nil)
 	if err != nil {
 		panic(err)
 	}
-	store, err := storage.NewWithDefaultOpt(context.Background(), s)
+	store, err := objstore.NewWithDefaultOpt(context.Background(), s)
 	if err != nil {
 		log.Fatalf("Failed to create storage: %v", err)
 	}
@@ -149,8 +151,8 @@ type processor struct {
 	rng          *rand.Rand
 	workerID     int
 	outCh        chan *dataChunk
-	store        storage.ExternalStorage
-	writer       storage.ExternalFileWriter
+	store        storeapi.Storage
+	writer       objectio.Writer
 	writtenFiles atomic.Int64
 	writtenSize  atomic.Int64
 }
@@ -212,8 +214,9 @@ func (p *processor) writeLoop(ctx context.Context) error {
 		}
 
 		if p.writer == nil {
-			writer, err := p.store.Create(ctx, c.filename, &storage.WriterOption{
+			writer, err := p.store.Create(ctx, c.filename, &storeapi.WriterOption{
 				Concurrency: 8,
+				PartSize:    16 * units.MiB,
 			})
 			if err != nil {
 				return fmt.Errorf("failed to create S3 file: %w", err)
