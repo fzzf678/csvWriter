@@ -22,7 +22,9 @@ import (
 
 	"github.com/docker/go-units"
 	"github.com/google/uuid"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore"
+	"github.com/pingcap/tidb/pkg/objstore/s3like"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 )
 
 // Command-line parameters
@@ -429,19 +431,19 @@ func generateJSON(rng *rand.Rand) string {
 	return string(jsonData)
 }
 
-func createExternalStorage() storage.ExternalStorage {
-	op := storage.BackendOptions{S3: storage.S3BackendOptions{
+func createExternalStorage() storeapi.Storage {
+	op := objstore.BackendOptions{S3: s3like.S3BackendOptions{
 		Region:          *s3Region,
 		AccessKey:       *s3AccessKey,
 		SecretAccessKey: *s3SecretKey,
 		Provider:        *s3Provider,
 		Endpoint:        *s3Endpoint,
 	}}
-	s, err := storage.ParseBackend(*s3Path, &op)
+	s, err := objstore.ParseBackend(*s3Path, &op)
 	if err != nil {
 		panic(err)
 	}
-	store, err := storage.NewWithDefaultOpt(context.Background(), s)
+	store, err := objstore.NewWithDefaultOpt(context.Background(), s)
 	if err != nil {
 		panic(err)
 	}
@@ -449,7 +451,7 @@ func createExternalStorage() storage.ExternalStorage {
 }
 
 // Write data to S3 with retry (column-oriented)
-func writeDataToS3(store storage.ExternalStorage, fileName string, data [][]string) error {
+func writeDataToS3(store storeapi.Storage, fileName string, data [][]string) error {
 	writer, err := store.Create(context.Background(), fileName, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create S3 file: %w", err)
@@ -489,7 +491,7 @@ func showFiles() {
 	store := createExternalStorage()
 	dirSize := 0.0
 	dirFileNum := 0
-	store.WalkDir(context.Background(), &storage.WalkOption{SkipSubDir: true}, func(path string, size int64) error {
+	store.WalkDir(context.Background(), &storeapi.WalkOption{SkipSubDir: true}, func(path string, size int64) error {
 		fSize := float64(size) / 1024 / 1024
 		log.Printf("Name: %s, Size: %d, Size (MiB): %f", path, size, fSize)
 		dirSize += fSize
@@ -579,7 +581,7 @@ func writeCSVToLocalDisk(filename string, data [][]string) error {
 func deleteAllFilesByPrefix(prefix string) {
 	var fileNames []string
 	store := createExternalStorage()
-	store.WalkDir(context.Background(), &storage.WalkOption{SkipSubDir: true}, func(path string, size int64) error {
+	store.WalkDir(context.Background(), &storeapi.WalkOption{SkipSubDir: true}, func(path string, size int64) error {
 		if strings.HasPrefix(path, prefix) {
 			fileNames = append(fileNames, path)
 		}
@@ -641,7 +643,7 @@ func generatorWorker(rng *rand.Rand, tasksCh <-chan Task, resultsCh chan<- Resul
 }
 
 // writerWorker retrieves generated results from resultsCh, writes them to CSV (or S3), and puts used slices back to pool
-func writerWorker(resultsCh <-chan Result, store storage.ExternalStorage, workerID int, pool *sync.Pool, wg *sync.WaitGroup) {
+func writerWorker(resultsCh <-chan Result, store storeapi.Storage, workerID int, pool *sync.Pool, wg *sync.WaitGroup) {
 	defer wg.Done()
 	var err error
 	for result := range resultsCh {
@@ -749,7 +751,7 @@ func generateData() {
 
 	var wgWriter sync.WaitGroup
 	// Start writer workers
-	op := storage.BackendOptions{S3: storage.S3BackendOptions{
+	op := objstore.BackendOptions{S3: s3like.S3BackendOptions{
 		Region:          *s3Region,
 		AccessKey:       *s3AccessKey,
 		SecretAccessKey: *s3SecretKey,
@@ -757,13 +759,13 @@ func generateData() {
 		Endpoint:        *s3Endpoint,
 		RoleARN:         *s3RoleARN,
 	}}
-	s, err := storage.ParseBackend(*s3Path, &op)
+	s, err := objstore.ParseBackend(*s3Path, &op)
 	if err != nil {
 		panic(err)
 	}
-	var store storage.ExternalStorage
+	var store storeapi.Storage
 	if *localPath == "" {
-		store, err = storage.NewWithDefaultOpt(context.Background(), s)
+		store, err = objstore.NewWithDefaultOpt(context.Background(), s)
 		if err != nil {
 			panic(err)
 		}
