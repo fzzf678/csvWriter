@@ -73,7 +73,7 @@ Please note that not all attributes apply to every data type. The attributes mar
 By following this guide and adjusting the configuration file accordingly, you can effectively customize the generated data to fit your testing or benchmarking needs.
 
 ### Step 2. Prepare your command line
-The tool uses command line parameters to control the path to write to S3, the number of rows generated, the number of rows in each csv file, etc. So prepare your command line before starting to create data. The command line parameters are listed below:
+The tool uses command line parameters to control the path to write to S3, the number of rows generated, the number of rows in each tsv file, etc. So prepare your command line before starting to create data. The command line parameters are listed below:
 
 ```
   -base64Encode
@@ -103,7 +103,7 @@ The tool uses command line parameters to control the path to write to S3, the nu
   -pkEnd int
         End of primary key [begin, end) (default 10)
   -rowNumPerFile int
-        Number of rows to generate in each csv file (default 10)
+        Number of rows to generate in each tsv file (default 10)
   -s3AccessKey string
         S3 access key
   -s3Endpoint string
@@ -127,7 +127,7 @@ The tool uses command line parameters to control the path to write to S3, the nu
 
 The `pkBegin` and `pkEnd` controls the total row generated, even if your table does not have a primary key, these two parameters is also needed.
 If you are going to execute multiple commands generate data concurrently, you can build this as a binary and plan the range of primary keys, the number of files in each directory, file names in advance.
-For example, this command will generate 50000(pkEnd-pkBegin) rows data, each csv has 10000 rows, total 5 csv files will be written to `s3Path=gcs://path/to/directory` directory, file names are `part000.000000000.csv ~ part000.000000004.csv`
+For example, this command will generate 50000(pkEnd-pkBegin) rows data, each tsv has 10000 rows, total 5 tsv files will be written to `s3Path=gcs://path/to/directory` directory, file names are `part000.000000000.tsv ~ part000.000000004.tsv`
 ```
 go run main.go -tableInfo=./table_info.csv -pkBegin=0 -pkEnd=50000 -rowNumPerFile=10000 -s3Path=gcs://path/to/directory -fileNameSuffixStart=0 -fileName=part000
 ```

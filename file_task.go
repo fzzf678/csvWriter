@@ -16,7 +16,7 @@ func (t *Task) hasMoreRows() bool {
 func (t *Task) nextRow(rng *rand.Rand, out *strings.Builder) {
 	for i, col := range t.cols {
 		if i > 0 {
-			out.WriteString(",")
+			out.WriteString(outputDelimiter)
 		}
 		switch col.Type {
 		case STRING:

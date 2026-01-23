@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/csv"
@@ -41,10 +40,10 @@ var (
 	fileName            = flag.String("fileName", "testCSVWriter", "Base file name")
 	fileNameSuffixStart = flag.Int("fileNameSuffixStart", 0, "Start of file name suffix")
 	credentialPath      = flag.String("credential", "", "Path to S3 credential file")
-	rowNumPerFile       = flag.Int("rowNumPerFile", 10, "Number of rows to generate in each csv file")
+	rowNumPerFile       = flag.Int("rowNumPerFile", 10, "Number of rows to generate in each tsv file")
 	pkBegin             = flag.Int("pkBegin", 0, "Begin of primary key, [begin, end)")
 	pkEnd               = flag.Int("pkEnd", 10, "End of primary key [begin, end)")
-	base64Encode        = flag.Bool("base64Encode", false, "Base64 encode the CSV file")
+	base64Encode        = flag.Bool("base64Encode", false, "Base64 encode the TSV file")
 	useProcessor        = flag.Bool("useProcessor", false, "use the processor impl to avoid OOM")
 	generatorNum        = flag.Int("generatorNum", 1, "Number of generator goroutines")
 	writerNum           = flag.Int("writerNum", 8, "Number of writer goroutines")
@@ -59,12 +58,14 @@ var (
 )
 
 const (
-	maxRetries     = 3
-	uuidLen        = 36
-	totalOrdered   = "TOTAL ORDERED"
-	partialOrdered = "PARTIAL ORDERED"
-	totalRandom    = "TOTAL RANDOM"
-	nullVal        = "\\N"
+	maxRetries      = 3
+	uuidLen         = 36
+	totalOrdered    = "TOTAL ORDERED"
+	partialOrdered  = "PARTIAL ORDERED"
+	totalRandom     = "TOTAL RANDOM"
+	nullVal         = "\\N"
+	outputDelimiter = "\t"
+	outputFileExt   = "tsv"
 )
 
 var (
@@ -469,7 +470,7 @@ func writeDataToS3(store storeapi.Storage, fileName string, data [][]string) err
 				row[j] = data[j][i]
 			}
 		}
-		_, err = writer.Write(context.Background(), []byte(strings.Join(row, ",")+"\n"))
+		_, err = writer.Write(context.Background(), []byte(strings.Join(row, outputDelimiter)+"\n"))
 		if err != nil {
 			log.Printf("Write to S3 failed, deleting file: %s", fileName)
 			store.DeleteFile(context.Background(), fileName) // Delete the file if write fails
@@ -529,30 +530,13 @@ func fetchFileFromS3(fileName string) {
 	}
 	defer file.Close() // Ensure the file is closed after writing
 
-	// Assuming res contains CSV data as []byte, convert it to string and split by newlines
-	// (In case the file is already in CSV format, or you need to write CSV data)
-	reader := csv.NewReader(bytes.NewReader(res)) // Read the []byte as CSV
-	writer := csv.NewWriter(file)                 // Prepare to write to file
-	defer writer.Flush()                          // Ensure data is written to file
-
-	// Read the CSV records from the []byte data
-	for {
-		record, err := reader.Read()
-		if err != nil {
-			if err.Error() != "EOF" {
-				panic(fmt.Errorf("failed to read CSV from file: %v", err))
-			}
-			break
-		}
-		// Write the CSV record to the file
-		if err := writer.Write(record); err != nil {
-			panic(fmt.Errorf("failed to write CSV row: %v", err))
-		}
+	if _, err := file.Write(res); err != nil {
+		panic(fmt.Errorf("failed to write file %s: %v", *localPath, err))
 	}
 	fmt.Printf("File %s successfully fetched and written to %s\n", fileName, *localPath)
 }
 
-// Write CSV to local disk (column-oriented)
+// Write TSV to local disk (column-oriented)
 func writeCSVToLocalDisk(filename string, data [][]string) error {
 	file, err := os.Create(filename)
 	if err != nil {
@@ -561,9 +545,10 @@ func writeCSVToLocalDisk(filename string, data [][]string) error {
 	defer file.Close()
 
 	writer := csv.NewWriter(file)
+	writer.Comma = '\t'
 	defer writer.Flush()
 
-	// Write CSV data
+	// Write TSV data
 	for i := 0; i < len(data[0]); i++ {
 		row := []string{}
 		for j := 0; j < len(data); j++ {
@@ -642,7 +627,7 @@ func generatorWorker(rng *rand.Rand, tasksCh <-chan Task, resultsCh chan<- Resul
 	}
 }
 
-// writerWorker retrieves generated results from resultsCh, writes them to CSV (or S3), and puts used slices back to pool
+// writerWorker retrieves generated results from resultsCh, writes them to TSV (or S3), and puts used slices back to pool
 func writerWorker(resultsCh <-chan Result, store storeapi.Storage, workerID int, pool *sync.Pool, wg *sync.WaitGroup) {
 	defer wg.Done()
 	var err error
@@ -653,9 +638,9 @@ func writerWorker(resultsCh <-chan Result, store storeapi.Storage, workerID int,
 		for attempt := 1; attempt <= maxRetries; attempt++ {
 			startTime := time.Now()
 			if *localPath != "" {
-				err = writeCSVToLocalDisk(*localPath+fileName, result.values)
+				err = writeCSVToLocalDisk(filepath.Join(*localPath, fileName), result.values)
 				if err != nil {
-					log.Fatal("Error writing CSV:", err)
+					log.Fatal("Error writing file:", err)
 				}
 			} else {
 				err = writeDataToS3(store, fileName, result.values)
@@ -783,14 +768,14 @@ func generateData() {
 	for pk := *pkBegin; pk < *pkEnd; pk += *rowNumPerFile {
 		begin := pk
 		end := pk + *rowNumPerFile
-		csvFileName := fmt.Sprintf("%s.%09d.csv", *fileName, taskID)
-		fileNames = append(fileNames, csvFileName)
+		outputFileName := fmt.Sprintf("%s.%09d.%s", *fileName, taskID, outputFileExt)
+		fileNames = append(fileNames, outputFileName)
 		task := Task{
 			id:       taskID,
 			begin:    begin,
 			end:      end,
 			cols:     columns,
-			fileName: csvFileName,
+			fileName: outputFileName,
 		}
 		tasksCh <- task
 		taskID++
