@@ -1,8 +1,10 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"strings"
@@ -113,15 +115,15 @@ func genWithTaskProcessor() {
 		for pk := *pkBegin; pk < *pkEnd; pk += *rowNumPerFile {
 			begin := pk
 			end := pk + *rowNumPerFile
-			outputFileName := fmt.Sprintf("%s.%09d.%s", *fileName, taskID, outputFileExt)
-			fileNames = append(fileNames, outputFileName)
+			fileName := outputFileName(taskID)
+			fileNames = append(fileNames, fileName)
 			task := Task{
 				id:       taskID,
 				begin:    begin,
 				curr:     begin,
 				end:      end,
 				cols:     columns,
-				fileName: outputFileName,
+				fileName: fileName,
 			}
 			select {
 			case <-ctx.Done():
@@ -153,6 +155,8 @@ type processor struct {
 	outCh        chan *dataChunk
 	store        storeapi.Storage
 	writer       objectio.Writer
+	out          io.Writer
+	outClose     func() error
 	writtenFiles atomic.Int64
 	writtenSize  atomic.Int64
 }
@@ -222,29 +226,47 @@ func (p *processor) writeLoop(ctx context.Context) error {
 				return fmt.Errorf("failed to create S3 file: %w", err)
 			}
 			p.writer = writer
+			p.out = ctxToIOWriter{ctx: ctx, w: writer}
+			p.outClose = func() error { return nil }
+			if strings.EqualFold(*s3Compress, "gzip") {
+				gzipWriter, err := gzip.NewWriterLevel(p.out, gzip.BestSpeed)
+				if err != nil {
+					return fmt.Errorf("failed to create gzip writer: %w", err)
+				}
+				p.out = gzipWriter
+				p.outClose = gzipWriter.Close
+			}
 		}
 
 		data := []byte(c.sb.String())
-		_, err := p.writer.Write(ctx, data)
+		_, err := p.out.Write(data)
 		if err != nil {
 			return fmt.Errorf("failed to write to S3: %w", err)
 		}
 		p.writtenSize.Add(int64(len(data)))
 		if c.last {
-			if err := p.closeWriter(); err != nil {
+			if err := p.closeWriter(ctx); err != nil {
 				return err
 			}
 		}
 	}
-	return p.closeWriter()
+	return p.closeWriter(ctx)
 }
 
-func (p *processor) closeWriter() error {
+func (p *processor) closeWriter(ctx context.Context) error {
 	if p.writer != nil {
 		writer := p.writer
+		if p.outClose != nil {
+			if err := p.outClose(); err != nil {
+				_ = writer.Close(ctx)
+				return err
+			}
+		}
 		p.writer = nil
+		p.out = nil
+		p.outClose = nil
 		p.writtenFiles.Add(1)
-		return writer.Close(context.Background())
+		return writer.Close(ctx)
 	}
 	return nil
 }

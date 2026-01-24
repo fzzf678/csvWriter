@@ -77,7 +77,7 @@ The tool uses command line parameters to control the path to write to S3, the nu
 
 ```
   -base64Encode
-        Base64 encode the CSV file
+        Base64 encode the TSV file
   -credential string
         Path to S3 credential file
   -deleteAfterGen
@@ -116,6 +116,8 @@ The tool uses command line parameters to control the path to write to S3, the nu
         S3 region
   -s3SecretKey string
         S3 secret key
+  -s3Compress string
+        S3 output compression: none|gzip|tar.gz (default "tar.gz")
   -showFile
         List all files in the S3 directory
   -tableInfo string
@@ -125,9 +127,11 @@ The tool uses command line parameters to control the path to write to S3, the nu
 
 ```
 
+When writing to S3, the default output is `*.tar.gz` (a tarball containing a single `*.tsv` file). Use `-s3Compress=gzip` for `*.tsv.gz`, or `-s3Compress=none` for plain `*.tsv`. Note: `-useProcessor` supports `none|gzip` only.
+
 The `pkBegin` and `pkEnd` controls the total row generated, even if your table does not have a primary key, these two parameters is also needed.
 If you are going to execute multiple commands generate data concurrently, you can build this as a binary and plan the range of primary keys, the number of files in each directory, file names in advance.
-For example, this command will generate 50000(pkEnd-pkBegin) rows data, each tsv has 10000 rows, total 5 tsv files will be written to `s3Path=gcs://path/to/directory` directory, file names are `part000.000000000.tsv ~ part000.000000004.tsv`
+For example, this command will generate 50000(pkEnd-pkBegin) rows data, each tsv has 10000 rows, total 5 tar.gz files will be written to `s3Path=gcs://path/to/directory` directory, file names are `part000.000000000.tar.gz ~ part000.000000004.tar.gz`
 ```
 go run main.go -tableInfo=./table_info.csv -pkBegin=0 -pkEnd=50000 -rowNumPerFile=10000 -s3Path=gcs://path/to/directory -fileNameSuffixStart=0 -fileName=part000
 ```

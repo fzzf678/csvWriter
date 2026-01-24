@@ -1,12 +1,15 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"math/rand"
@@ -55,6 +58,8 @@ var (
 	s3Provider  = flag.String("s3Provider", "", "S3 provider")
 	s3Endpoint  = flag.String("s3Endpoint", "", "S3 endpoint")
 	s3RoleARN   = flag.String("s3RoleARN", "", "S3 RoleARN")
+
+	s3Compress = flag.String("s3Compress", "tar.gz", "S3 output compression: none|gzip|tar.gz")
 )
 
 const (
@@ -76,6 +81,40 @@ var (
 	}
 	rngs []*rand.Rand
 )
+
+type ctxByteWriter interface {
+	Write(context.Context, []byte) (int, error)
+}
+
+type ctxToIOWriter struct {
+	ctx context.Context
+	w   ctxByteWriter
+}
+
+func (w ctxToIOWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(w.ctx, p)
+	if err == nil && n != len(p) {
+		return n, io.ErrShortWrite
+	}
+	return n, err
+}
+
+func outputExt() string {
+	if *localPath != "" {
+		return outputFileExt
+	}
+	if strings.EqualFold(*s3Compress, "gzip") {
+		return outputFileExt + ".gz"
+	}
+	if strings.EqualFold(*s3Compress, "tar.gz") {
+		return "tar.gz"
+	}
+	return outputFileExt
+}
+
+func outputFileName(taskID int) string {
+	return fmt.Sprintf("%s.%09d.%s", *fileName, taskID, outputExt())
+}
 
 // Initialize Faker instance
 func init() {
@@ -452,32 +491,135 @@ func createExternalStorage() storeapi.Storage {
 }
 
 // Write data to S3 with retry (column-oriented)
-func writeDataToS3(store storeapi.Storage, fileName string, data [][]string) error {
-	writer, err := store.Create(context.Background(), fileName, nil)
+func writeDataToS3(store storeapi.Storage, objectName string, taskID int, data [][]string) (retErr error) {
+	ctx := context.Background()
+	writer, err := store.Create(ctx, objectName, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create S3 file: %w", err)
 	}
-	defer writer.Close(context.Background())
+	defer func() {
+		if err := writer.Close(ctx); retErr == nil && err != nil {
+			retErr = err
+		}
+	}()
 
 	rowCnt := len(data[0])
 	colCnt := len(data)
 	row := make([]string, colCnt)
-	for i := 0; i < rowCnt; i++ {
-		for j := 0; j < colCnt; j++ {
-			if *base64Encode {
-				row[j] = base64.StdEncoding.EncodeToString([]byte(data[j][i]))
-			} else {
-				row[j] = data[j][i]
+
+	switch strings.ToLower(*s3Compress) {
+	case "none":
+		out := io.Writer(ctxToIOWriter{ctx: ctx, w: writer})
+		for i := 0; i < rowCnt; i++ {
+			for j := 0; j < colCnt; j++ {
+				if *base64Encode {
+					row[j] = base64.StdEncoding.EncodeToString([]byte(data[j][i]))
+				} else {
+					row[j] = data[j][i]
+				}
+			}
+			_, err = out.Write([]byte(strings.Join(row, outputDelimiter) + "\n"))
+			if err != nil {
+				log.Printf("Write to S3 failed, deleting file: %s", objectName)
+				store.DeleteFile(ctx, objectName)
+				return fmt.Errorf("failed to write to S3: %w", err)
 			}
 		}
-		_, err = writer.Write(context.Background(), []byte(strings.Join(row, outputDelimiter)+"\n"))
+		return nil
+	case "gzip":
+		out := io.Writer(ctxToIOWriter{ctx: ctx, w: writer})
+		gzipWriter, err := gzip.NewWriterLevel(out, gzip.BestSpeed)
 		if err != nil {
-			log.Printf("Write to S3 failed, deleting file: %s", fileName)
-			store.DeleteFile(context.Background(), fileName) // Delete the file if write fails
-			return fmt.Errorf("failed to write to S3: %w", err)
+			return fmt.Errorf("failed to create gzip writer: %w", err)
 		}
+		defer func() {
+			if err := gzipWriter.Close(); retErr == nil && err != nil {
+				retErr = err
+			}
+		}()
+		for i := 0; i < rowCnt; i++ {
+			for j := 0; j < colCnt; j++ {
+				if *base64Encode {
+					row[j] = base64.StdEncoding.EncodeToString([]byte(data[j][i]))
+				} else {
+					row[j] = data[j][i]
+				}
+			}
+			_, err = gzipWriter.Write([]byte(strings.Join(row, outputDelimiter) + "\n"))
+			if err != nil {
+				log.Printf("Write to S3 failed, deleting file: %s", objectName)
+				store.DeleteFile(ctx, objectName)
+				return fmt.Errorf("failed to write to S3: %w", err)
+			}
+		}
+		return nil
+	case "tar.gz":
+		out := io.Writer(ctxToIOWriter{ctx: ctx, w: writer})
+		gzipWriter, err := gzip.NewWriterLevel(out, gzip.BestSpeed)
+		if err != nil {
+			return fmt.Errorf("failed to create gzip writer: %w", err)
+		}
+		defer func() {
+			if err := gzipWriter.Close(); retErr == nil && err != nil {
+				retErr = err
+			}
+		}()
+
+		tarWriter := tar.NewWriter(gzipWriter)
+		defer func() {
+			if err := tarWriter.Close(); retErr == nil && err != nil {
+				retErr = err
+			}
+		}()
+
+		tsvSize := int64(0)
+		delimLen := int64(len(outputDelimiter))
+		for i := 0; i < rowCnt; i++ {
+			for j := 0; j < colCnt; j++ {
+				if j > 0 {
+					tsvSize += delimLen
+				}
+				if *base64Encode {
+					tsvSize += int64(base64.StdEncoding.EncodedLen(len(data[j][i])))
+				} else {
+					tsvSize += int64(len(data[j][i]))
+				}
+			}
+			tsvSize++ // newline
+		}
+
+		innerName := fmt.Sprintf("%s.%09d.%s", *fileName, taskID, outputFileExt)
+		if err := tarWriter.WriteHeader(&tar.Header{Name: innerName, Mode: 0o644, Size: tsvSize}); err != nil {
+			store.DeleteFile(ctx, objectName)
+			return fmt.Errorf("failed to write tar header: %w", err)
+		}
+
+		for i := 0; i < rowCnt; i++ {
+			for j := 0; j < colCnt; j++ {
+				if j > 0 {
+					if _, err := io.WriteString(tarWriter, outputDelimiter); err != nil {
+						store.DeleteFile(ctx, objectName)
+						return fmt.Errorf("failed to write to S3: %w", err)
+					}
+				}
+				val := data[j][i]
+				if *base64Encode {
+					val = base64.StdEncoding.EncodeToString([]byte(val))
+				}
+				if _, err := io.WriteString(tarWriter, val); err != nil {
+					store.DeleteFile(ctx, objectName)
+					return fmt.Errorf("failed to write to S3: %w", err)
+				}
+			}
+			if _, err := io.WriteString(tarWriter, "\n"); err != nil {
+				store.DeleteFile(ctx, objectName)
+				return fmt.Errorf("failed to write to S3: %w", err)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported s3Compress: %s", *s3Compress)
 	}
-	return nil
 }
 
 func deleteFileByName(fileName string) {
@@ -643,7 +785,7 @@ func writerWorker(resultsCh <-chan Result, store storeapi.Storage, workerID int,
 					log.Fatal("Error writing file:", err)
 				}
 			} else {
-				err = writeDataToS3(store, fileName, result.values)
+				err = writeDataToS3(store, fileName, result.id, result.values)
 			}
 			if err == nil {
 				log.Printf("Writer %d: Wrote %s (%d rows), elapsed time: %v", workerID, fileName, len(result.values[0]), time.Since(startTime))
@@ -768,14 +910,14 @@ func generateData() {
 	for pk := *pkBegin; pk < *pkEnd; pk += *rowNumPerFile {
 		begin := pk
 		end := pk + *rowNumPerFile
-		outputFileName := fmt.Sprintf("%s.%09d.%s", *fileName, taskID, outputFileExt)
-		fileNames = append(fileNames, outputFileName)
+		fileName := outputFileName(taskID)
+		fileNames = append(fileNames, fileName)
 		task := Task{
 			id:       taskID,
 			begin:    begin,
 			end:      end,
 			cols:     columns,
-			fileName: outputFileName,
+			fileName: fileName,
 		}
 		tasksCh <- task
 		taskID++
@@ -807,6 +949,18 @@ func generateData() {
 func main() {
 	// Parse command-line arguments.
 	flag.Parse()
+
+	switch strings.ToLower(*s3Compress) {
+	case "none", "gzip", "tar.gz":
+	default:
+		log.Fatalf("Unsupported -s3Compress=%q, supported values: none|gzip|tar.gz", *s3Compress)
+	}
+	if *useProcessor && *localPath != "" {
+		log.Fatal("useProcessor does not support localPath output (it writes to S3 only)")
+	}
+	if *useProcessor && strings.EqualFold(*s3Compress, "tar.gz") {
+		log.Fatal("useProcessor does not support -s3Compress=tar.gz (use -s3Compress=gzip instead)")
+	}
 
 	// List files in S3 directory
 	if *showFile {
