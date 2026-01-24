@@ -854,7 +854,7 @@ func generateData() {
 
 	// Create tasks and results channels
 	tasksCh := make(chan Task, *generatorNum)
-	resultsCh := make(chan Result, *writerNum)
+	resultsCh := make(chan Result, 2)
 
 	// Create a sync.Pool for reusing [][]string slices, initial capacity equals number of columns
 	pool := &sync.Pool{
