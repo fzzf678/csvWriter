@@ -41,10 +41,11 @@ var (
 	fileName            = flag.String("fileName", "testCSVWriter", "Base file name")
 	fileNameSuffixStart = flag.Int("fileNameSuffixStart", 0, "Start of file name suffix")
 	credentialPath      = flag.String("credential", "", "Path to S3 credential file")
-	rowNumPerFile       = flag.Int("rowNumPerFile", 10, "Number of rows to generate in each csv file")
+	rowNumPerFile       = flag.Int("rowNumPerFile", 10, "Number of rows to generate in each output file")
 	pkBegin             = flag.Int("pkBegin", 0, "Begin of primary key, [begin, end)")
 	pkEnd               = flag.Int("pkEnd", 10, "End of primary key [begin, end)")
-	base64Encode        = flag.Bool("base64Encode", false, "Base64 encode the CSV file")
+	base64Encode        = flag.Bool("base64Encode", false, "Base64 encode the output file")
+	outputFormat        = flag.String("format", "csv", "Output format: csv or tsv")
 	useProcessor        = flag.Bool("useProcessor", false, "use the processor impl to avoid OOM")
 	generatorNum        = flag.Int("generatorNum", 1, "Number of generator goroutines")
 	writerNum           = flag.Int("writerNum", 8, "Number of writer goroutines")
@@ -74,7 +75,26 @@ var (
 		"total random":    totalRandom,
 	}
 	rngs []*rand.Rand
+
+	outputExt      = "csv"
+	fieldDelimiter = ','
+	fieldSeparator = ","
 )
+
+func configureOutputFormat() {
+	switch strings.ToLower(strings.TrimSpace(*outputFormat)) {
+	case "", "csv":
+		outputExt = "csv"
+		fieldDelimiter = ','
+		fieldSeparator = ","
+	case "tsv":
+		outputExt = "tsv"
+		fieldDelimiter = '\t'
+		fieldSeparator = "\t"
+	default:
+		log.Fatalf("Unsupported format: %q (supported: csv, tsv)", *outputFormat)
+	}
+}
 
 // Initialize Faker instance
 func init() {
@@ -469,7 +489,7 @@ func writeDataToS3(store storeapi.Storage, fileName string, data [][]string) err
 				row[j] = data[j][i]
 			}
 		}
-		_, err = writer.Write(context.Background(), []byte(strings.Join(row, ",")+"\n"))
+		_, err = writer.Write(context.Background(), []byte(strings.Join(row, fieldSeparator)+"\n"))
 		if err != nil {
 			log.Printf("Write to S3 failed, deleting file: %s", fileName)
 			store.DeleteFile(context.Background(), fileName) // Delete the file if write fails
@@ -533,7 +553,9 @@ func fetchFileFromS3(fileName string) {
 	// (In case the file is already in CSV format, or you need to write CSV data)
 	reader := csv.NewReader(bytes.NewReader(res)) // Read the []byte as CSV
 	writer := csv.NewWriter(file)                 // Prepare to write to file
-	defer writer.Flush()                          // Ensure data is written to file
+	reader.Comma = fieldDelimiter
+	writer.Comma = fieldDelimiter
+	defer writer.Flush() // Ensure data is written to file
 
 	// Read the CSV records from the []byte data
 	for {
@@ -561,6 +583,7 @@ func writeCSVToLocalDisk(filename string, data [][]string) error {
 	defer file.Close()
 
 	writer := csv.NewWriter(file)
+	writer.Comma = fieldDelimiter
 	defer writer.Flush()
 
 	// Write CSV data
@@ -655,7 +678,7 @@ func writerWorker(resultsCh <-chan Result, store storeapi.Storage, workerID int,
 			if *localPath != "" {
 				err = writeCSVToLocalDisk(*localPath+fileName, result.values)
 				if err != nil {
-					log.Fatal("Error writing CSV:", err)
+					log.Fatal("Error writing output file:", err)
 				}
 			} else {
 				err = writeDataToS3(store, fileName, result.values)
@@ -783,14 +806,14 @@ func generateData() {
 	for pk := *pkBegin; pk < *pkEnd; pk += *rowNumPerFile {
 		begin := pk
 		end := pk + *rowNumPerFile
-		csvFileName := fmt.Sprintf("%s.%09d.csv", *fileName, taskID)
-		fileNames = append(fileNames, csvFileName)
+		outFileName := fmt.Sprintf("%s.%09d.%s", *fileName, taskID, outputExt)
+		fileNames = append(fileNames, outFileName)
 		task := Task{
 			id:       taskID,
 			begin:    begin,
 			end:      end,
 			cols:     columns,
-			fileName: csvFileName,
+			fileName: outFileName,
 		}
 		tasksCh <- task
 		taskID++
@@ -822,6 +845,7 @@ func generateData() {
 func main() {
 	// Parse command-line arguments.
 	flag.Parse()
+	configureOutputFormat()
 
 	// List files in S3 directory
 	if *showFile {

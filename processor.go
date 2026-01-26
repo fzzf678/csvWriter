@@ -113,15 +113,15 @@ func genWithTaskProcessor() {
 		for pk := *pkBegin; pk < *pkEnd; pk += *rowNumPerFile {
 			begin := pk
 			end := pk + *rowNumPerFile
-			csvFileName := fmt.Sprintf("%s.%09d.csv", *fileName, taskID)
-			fileNames = append(fileNames, csvFileName)
+			outFileName := fmt.Sprintf("%s.%09d.%s", *fileName, taskID, outputExt)
+			fileNames = append(fileNames, outFileName)
 			task := Task{
 				id:       taskID,
 				begin:    begin,
 				curr:     begin,
 				end:      end,
 				cols:     columns,
-				fileName: csvFileName,
+				fileName: outFileName,
 			}
 			select {
 			case <-ctx.Done():

@@ -73,11 +73,11 @@ Please note that not all attributes apply to every data type. The attributes mar
 By following this guide and adjusting the configuration file accordingly, you can effectively customize the generated data to fit your testing or benchmarking needs.
 
 ### Step 2. Prepare your command line
-The tool uses command line parameters to control the path to write to S3, the number of rows generated, the number of rows in each csv file, etc. So prepare your command line before starting to create data. The command line parameters are listed below:
+The tool uses command line parameters to control the path to write to S3, the number of rows generated, the number of rows in each output file, etc. So prepare your command line before starting to create data. The command line parameters are listed below:
 
 ```
   -base64Encode
-        Base64 encode the CSV file
+        Base64 encode the output file
   -credential string
         Path to S3 credential file
   -deleteAfterGen
@@ -88,6 +88,8 @@ The tool uses command line parameters to control the path to write to S3, the nu
         Delete all files with the specific prefix
   -fetchFile string
         Fetch a specific file from S3, need to specify the local path.
+  -format string
+        Output format: csv or tsv (default "csv")
   -fileName string
         Base file name (default "testCSVWriter")
   -fileNameSuffixStart int
@@ -103,7 +105,7 @@ The tool uses command line parameters to control the path to write to S3, the nu
   -pkEnd int
         End of primary key [begin, end) (default 10)
   -rowNumPerFile int
-        Number of rows to generate in each csv file (default 10)
+        Number of rows to generate in each output file (default 10)
   -s3AccessKey string
         S3 access key
   -s3Endpoint string
@@ -127,7 +129,7 @@ The tool uses command line parameters to control the path to write to S3, the nu
 
 The `pkBegin` and `pkEnd` controls the total row generated, even if your table does not have a primary key, these two parameters is also needed.
 If you are going to execute multiple commands generate data concurrently, you can build this as a binary and plan the range of primary keys, the number of files in each directory, file names in advance.
-For example, this command will generate 50000(pkEnd-pkBegin) rows data, each csv has 10000 rows, total 5 csv files will be written to `s3Path=gcs://path/to/directory` directory, file names are `part000.000000000.csv ~ part000.000000004.csv`
+For example, this command will generate 50000(pkEnd-pkBegin) rows data, each file has 10000 rows, total 5 files will be written to `s3Path=gcs://path/to/directory` directory, file names are `part000.000000000.csv ~ part000.000000004.csv` (use `-format=tsv` to generate `.tsv` files)
 ```
 go run main.go -tableInfo=./table_info.csv -pkBegin=0 -pkEnd=50000 -rowNumPerFile=10000 -s3Path=gcs://path/to/directory -fileNameSuffixStart=0 -fileName=part000
 ```
