@@ -566,29 +566,43 @@ func fetchFileFromS3(fileName string) {
 
 // Write CSV to local disk (column-oriented)
 func writeCSVToLocalDisk(filename string, data [][]string) error {
+	if len(data) == 0 {
+		return fmt.Errorf("no columns to write")
+	}
+	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+		return err
+	}
 	file, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 
 	writer := csv.NewWriter(file)
 	writer.Comma = fieldDelimiter
-	defer writer.Flush()
 
 	// Write CSV data
-	for i := 0; i < len(data[0]); i++ {
-		row := []string{}
-		for j := 0; j < len(data); j++ {
+	rowCnt := len(data[0])
+	colCnt := len(data)
+	row := make([]string, colCnt)
+	for i := 0; i < rowCnt; i++ {
+		for j := 0; j < colCnt; j++ {
 			if *base64Encode {
-				row = append(row, base64.StdEncoding.EncodeToString([]byte(data[j][i])))
+				row[j] = base64.StdEncoding.EncodeToString([]byte(data[j][i]))
 			} else {
-				row = append(row, data[j][i])
+				row[j] = data[j][i]
 			}
 		}
-		writer.Write(row)
+		if err := writer.Write(row); err != nil {
+			_ = file.Close()
+			return err
+		}
 	}
-	return nil
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func deleteAllFilesByPrefix(prefix string) {
