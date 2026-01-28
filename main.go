@@ -458,6 +458,7 @@ func createExternalStorage() storeapi.Storage {
 		SecretAccessKey: *s3SecretKey,
 		Provider:        *s3Provider,
 		Endpoint:        *s3Endpoint,
+		RoleARN:         *s3RoleARN,
 	}}
 	s, err := objstore.ParseBackend(*s3Path, &op)
 	if err != nil {
