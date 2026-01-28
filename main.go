@@ -680,7 +680,7 @@ func writerWorker(resultsCh <-chan Result, store storeapi.Storage, workerID int,
 		for attempt := 1; attempt <= maxRetries; attempt++ {
 			startTime := time.Now()
 			if *localPath != "" {
-				err = writeCSVToLocalDisk(*localPath+fileName, result.values)
+				err = writeCSVToLocalDisk(filepath.Join(*localPath, fileName), result.values)
 				if err != nil {
 					log.Fatal("Error writing output file:", err)
 				}
