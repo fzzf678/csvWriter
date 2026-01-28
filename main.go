@@ -182,7 +182,7 @@ func loadSchemaInfoFromCSV(filename string) []*Column {
 		if columns[i].Mean, err = strconv.ParseFloat(colInfo[7], 64); len(colInfo[7]) != 0 && err != nil {
 			panic(err)
 		}
-		if columns[i].StdDev, err = strconv.ParseFloat(colInfo[8], 64); len(colInfo[7]) != 0 && err != nil {
+		if columns[i].StdDev, err = strconv.ParseFloat(colInfo[8], 64); len(colInfo[8]) != 0 && err != nil {
 			panic(err)
 		}
 		checkColumnInfoLegality(columns[i])
