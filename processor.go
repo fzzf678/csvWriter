@@ -59,7 +59,14 @@ func genWithTaskProcessor() {
 	processors := make([]*processor, 0, *generatorNum)
 	var doneProcessors atomic.Int32
 	allProcessorDone := make(chan struct{})
-	tasksCh := make(chan Task, taskCount)
+	taskQueueSize := *generatorNum * 2
+	if taskQueueSize < 1 {
+		taskQueueSize = 1
+	}
+	if taskQueueSize > 1024 {
+		taskQueueSize = 1024
+	}
+	tasksCh := make(chan Task, taskQueueSize)
 	for i := 0; i < *generatorNum; i++ {
 		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 		p := &processor{
