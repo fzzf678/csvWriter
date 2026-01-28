@@ -10,9 +10,7 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
-	"github.com/pingcap/tidb/pkg/objstore"
 	"github.com/pingcap/tidb/pkg/objstore/objectio"
-	"github.com/pingcap/tidb/pkg/objstore/s3like"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/util"
 )
@@ -36,23 +34,7 @@ func genWithTaskProcessor() {
 	taskCount := (rowCount + *rowNumPerFile - 1) / *rowNumPerFile
 	log.Printf("Total tasks: %d, each task generates at most %d rows", taskCount, *rowNumPerFile)
 
-	// Keep consistent with the non-processor path: respect the CLI S3 flags (endpoint/provider/aksk/role/etc).
-	op := objstore.BackendOptions{S3: s3like.S3BackendOptions{
-		Region:          *s3Region,
-		AccessKey:       *s3AccessKey,
-		SecretAccessKey: *s3SecretKey,
-		Provider:        *s3Provider,
-		Endpoint:        *s3Endpoint,
-		RoleARN:         *s3RoleARN,
-	}}
-	s, err := objstore.ParseBackend(*s3Path, &op)
-	if err != nil {
-		panic(err)
-	}
-	store, err := objstore.NewWithDefaultOpt(context.Background(), s)
-	if err != nil {
-		log.Fatalf("Failed to create storage: %v", err)
-	}
+	store := createExternalStorage()
 
 	eg, ctx := util.NewErrorGroupWithRecoverWithCtx(context.Background())
 	// Start generator workers
