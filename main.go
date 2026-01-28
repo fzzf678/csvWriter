@@ -606,20 +606,42 @@ func writeCSVToLocalDisk(filename string, data [][]string) error {
 }
 
 func deleteAllFilesByPrefix(prefix string) {
-	var fileNames []string
 	store := createExternalStorage()
-	store.WalkDir(context.Background(), &storeapi.WalkOption{SkipSubDir: true}, func(path string, size int64) error {
-		if strings.HasPrefix(path, prefix) {
-			fileNames = append(fileNames, path)
+	ctx := context.Background()
+
+	const batchSize = 1000
+	batch := make([]string, 0, batchSize)
+	deleted := 0
+
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := store.DeleteFiles(ctx, batch); err != nil {
+			return err
+		}
+		deleted += len(batch)
+		batch = batch[:0]
+		return nil
+	}
+
+	err := store.WalkDir(ctx, &storeapi.WalkOption{SkipSubDir: true, ObjPrefix: prefix}, func(path string, size int64) error {
+		if !strings.HasPrefix(path, prefix) {
+			return nil
+		}
+		batch = append(batch, path)
+		if len(batch) >= batchSize {
+			return flush()
 		}
 		return nil
 	})
-	for _, fileName := range fileNames {
-		err := store.DeleteFile(context.Background(), fileName)
-		if err != nil {
-			panic(err)
-		}
+	if err != nil {
+		panic(err)
 	}
+	if err := flush(); err != nil {
+		panic(err)
+	}
+	log.Printf("Deleted %d files with prefix %q", deleted, prefix)
 }
 
 // Task represents a task with a [begin, end) range indicating the number of rows to generate
