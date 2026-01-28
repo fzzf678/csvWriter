@@ -528,9 +528,13 @@ func glanceFiles(fileName string) {
 	if err != nil {
 		panic(fmt.Errorf("failed to open file %s: %v", fileName, err))
 	}
+	defer r.Close()
 	b := make([]byte, 1*units.MiB)
-	r.Read(b)
-	fmt.Println(string(b))
+	n, err := r.Read(b)
+	if err != nil && err != io.EOF {
+		panic(fmt.Errorf("failed to read file %s: %v", fileName, err))
+	}
+	fmt.Println(string(b[:n]))
 }
 
 func fetchFileFromS3(fileName string) {
