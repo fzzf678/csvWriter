@@ -859,6 +859,9 @@ func main() {
 		return
 	}
 	if *useProcessor {
+		if *localPath != "" {
+			log.Fatal("useProcessor mode does not support localPath; unset localPath or disable useProcessor")
+		}
 		genWithTaskProcessor()
 		return
 	}
