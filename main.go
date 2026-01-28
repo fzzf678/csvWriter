@@ -508,18 +508,21 @@ func deleteFileByName(fileName string) {
 	}
 }
 
-func showFiles() {
+func showFiles() error {
 	store := createExternalStorage()
 	dirSize := 0.0
 	dirFileNum := 0
-	store.WalkDir(context.Background(), &storeapi.WalkOption{SkipSubDir: true}, func(path string, size int64) error {
+	if err := store.WalkDir(context.Background(), &storeapi.WalkOption{SkipSubDir: true}, func(path string, size int64) error {
 		fSize := float64(size) / 1024 / 1024
 		log.Printf("Name: %s, Size: %d, Size (MiB): %f", path, size, fSize)
 		dirSize += fSize
 		dirFileNum++
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 	log.Printf("Total file Num: %d  Total size: %.2f MiB, %.2f GiB, %.2f TiB", dirFileNum, dirSize, dirSize/1024, dirSize/1024/1024)
+	return nil
 }
 
 func glanceFiles(fileName string) {
@@ -843,7 +846,9 @@ func generateData() {
 	wgWriter.Wait()
 	log.Printf("Write completed, total time: %v", time.Since(startTime))
 	if *localPath == "" {
-		showFiles()
+		if err := showFiles(); err != nil {
+			log.Printf("Failed to list files: %v", err)
+		}
 	}
 
 	if *deleteAfterGen {
@@ -864,7 +869,9 @@ func main() {
 
 	// List files in S3 directory
 	if *showFile {
-		showFiles()
+		if err := showFiles(); err != nil {
+			log.Fatal(err)
+		}
 		return
 	}
 
