@@ -473,11 +473,28 @@ func createExternalStorage() storeapi.Storage {
 
 // Write data to S3 with retry (column-oriented)
 func writeDataToS3(store storeapi.Storage, fileName string, data [][]string) error {
-	writer, err := store.Create(context.Background(), fileName, nil)
+	ctx := context.Background()
+	writer, err := store.Create(ctx, fileName, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create S3 file: %w", err)
 	}
-	defer writer.Close(context.Background())
+	defer func() {
+		closeErr := writer.Close(ctx)
+		if err != nil {
+			if closeErr != nil {
+				log.Printf("failed to close S3 writer for %s after write error: %v", fileName, closeErr)
+			}
+			return
+		}
+		if closeErr != nil {
+			log.Printf("failed to close S3 writer for %s, deleting file", fileName)
+			if deleteErr := store.DeleteFile(ctx, fileName); deleteErr != nil {
+				err = fmt.Errorf("failed to close S3 writer: %v (also failed to delete file: %v)", closeErr, deleteErr)
+				return
+			}
+			err = fmt.Errorf("failed to close S3 writer: %w", closeErr)
+		}
+	}()
 
 	rowCnt := len(data[0])
 	colCnt := len(data)
@@ -490,10 +507,11 @@ func writeDataToS3(store storeapi.Storage, fileName string, data [][]string) err
 				row[j] = data[j][i]
 			}
 		}
-		_, err = writer.Write(context.Background(), []byte(strings.Join(row, fieldSeparator)+"\n"))
+		_, err = writer.Write(ctx, []byte(strings.Join(row, fieldSeparator)+"\n"))
 		if err != nil {
 			log.Printf("Write to S3 failed, deleting file: %s", fileName)
-			store.DeleteFile(context.Background(), fileName) // Delete the file if write fails
+			// Delete the file if write fails (best effort).
+			_ = store.DeleteFile(ctx, fileName)
 			return fmt.Errorf("failed to write to S3: %w", err)
 		}
 	}
