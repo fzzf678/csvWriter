@@ -670,6 +670,10 @@ func writerWorker(resultsCh <-chan Result, store storeapi.Storage, workerID int,
 	defer wg.Done()
 	var err error
 	for result := range resultsCh {
+		rows := 0
+		if len(result.values) > 0 {
+			rows = len(result.values[0])
+		}
 		success := false
 		fileName := result.fileName
 		// Retry mechanism
@@ -684,7 +688,7 @@ func writerWorker(resultsCh <-chan Result, store storeapi.Storage, workerID int,
 				err = writeDataToS3(store, fileName, result.values)
 			}
 			if err == nil {
-				log.Printf("Writer %d: Wrote %s (%d rows), elapsed time: %v", workerID, fileName, len(result.values[0]), time.Since(startTime))
+				log.Printf("Writer %d: Wrote %s (%d rows), elapsed time: %v", workerID, fileName, rows, time.Since(startTime))
 				success = true
 				break
 			}
@@ -697,7 +701,7 @@ func writerWorker(resultsCh <-chan Result, store storeapi.Storage, workerID int,
 			time.Sleep(waitTime + time.Duration(rand.Intn(500))*time.Millisecond)
 		}
 		if !success {
-			log.Printf("Writer %d: Final write failed for %s (%d rows)", workerID, fileName, len(result.values))
+			log.Fatalf("Writer %d: Final write failed for %s (%d rows): %v", workerID, fileName, rows, err)
 		}
 		// Return the used slice to the pool for reuse
 		pool.Put(result.values)
