@@ -1,13 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"math/rand"
@@ -538,41 +538,26 @@ func fetchFileFromS3(fileName string) {
 	if exist, _ := store.FileExists(context.Background(), fileName); !exist {
 		panic(fmt.Errorf("file %s does not exist", fileName))
 	}
-	res, err := store.ReadFile(context.Background(), fileName)
+	r, err := store.Open(context.Background(), fileName, nil)
 	if err != nil {
-		panic(err)
+		panic(fmt.Errorf("failed to open file %s: %v", fileName, err))
 	}
+	defer r.Close()
 
-	// Open the local file where the content will be written
-	file, err := os.Create(filepath.Join(*localPath, fileName))
+	outPath := filepath.Join(*localPath, fileName)
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		panic(fmt.Errorf("failed to create directory for %s: %v", outPath, err))
+	}
+	file, err := os.Create(outPath)
 	if err != nil {
-		panic(fmt.Errorf("failed to create file %s: %v", *localPath, err))
+		panic(fmt.Errorf("failed to create file %s: %v", outPath, err))
 	}
-	defer file.Close() // Ensure the file is closed after writing
+	defer file.Close()
 
-	// Assuming res contains CSV data as []byte, convert it to string and split by newlines
-	// (In case the file is already in CSV format, or you need to write CSV data)
-	reader := csv.NewReader(bytes.NewReader(res)) // Read the []byte as CSV
-	writer := csv.NewWriter(file)                 // Prepare to write to file
-	reader.Comma = fieldDelimiter
-	writer.Comma = fieldDelimiter
-	defer writer.Flush() // Ensure data is written to file
-
-	// Read the CSV records from the []byte data
-	for {
-		record, err := reader.Read()
-		if err != nil {
-			if err.Error() != "EOF" {
-				panic(fmt.Errorf("failed to read CSV from file: %v", err))
-			}
-			break
-		}
-		// Write the CSV record to the file
-		if err := writer.Write(record); err != nil {
-			panic(fmt.Errorf("failed to write CSV row: %v", err))
-		}
+	if _, err := io.Copy(file, r); err != nil {
+		panic(fmt.Errorf("failed to write file %s: %v", outPath, err))
 	}
-	fmt.Printf("File %s successfully fetched and written to %s\n", fileName, *localPath)
+	fmt.Printf("File %s successfully fetched and written to %s\n", fileName, outPath)
 }
 
 // Write CSV to local disk (column-oriented)
