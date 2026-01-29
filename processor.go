@@ -179,6 +179,7 @@ func (p *processor) generate(ctx context.Context, tasksCh <-chan Task) error {
 		if !ok {
 			break
 		}
+		task.timestampEndUnix = time.Now().Unix()
 		for task.hasMoreRows() {
 			sb := &strings.Builder{}
 			for sb.Len() < 4*units.MiB && task.hasMoreRows() {

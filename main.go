@@ -207,23 +207,13 @@ func checkColumnInfoLegality(col *Column) {
 
 // Generate data for each column
 func (t *Task) generateValueByCol(rng *rand.Rand, col *Column, num int, res []string) {
-	switch col.Type {
-	case STRING:
-		col.generateString(rng, num, res)
-	case BOOLEAN:
-		col.generateBoolean(rng, num, res)
-	case INT:
-		col.generateInt(rng, num, res, t.begin)
-	case BIGINT:
-		col.generateBigint(rng, num, res, t.begin, t.end)
-	case DECIMAL:
-		col.generateDecimal(rng, num, res)
-	case TIMESTAMP:
-		col.generateTimestamp(rng, num, res)
-	case JSON:
-		col.generateJSONObject(rng, num, res)
-	default:
-		log.Printf("Unsupported type: %s", col.Type)
+	for i := 0; i < num; i++ {
+		rowID := t.begin + i
+		value, err := col.rawValueString(rng, rowID, t.timestampEndUnix)
+		if err != nil {
+			log.Fatalf("failed to generate value for col %q (type=%s) rowID=%d: %v", col.Name, col.Type, rowID, err)
+		}
+		res[i] = value
 	}
 }
 
@@ -411,12 +401,7 @@ func (c *Column) generateJSONObject(rng *rand.Rand, num int, res []string) {
 		if c.canThisValNull(rng) {
 			res[i] = nullVal
 		} else {
-			r := generateJSON(rng)
-			if *localPath == "" {
-				res[i] = escapeJSONString(r)
-			} else {
-				res[i] = r
-			}
+			res[i] = generateJSON(rng)
 		}
 	}
 }
@@ -472,7 +457,7 @@ func createExternalStorage() storeapi.Storage {
 }
 
 // Write data to S3 with retry (column-oriented)
-func writeDataToS3(store storeapi.Storage, fileName string, data [][]string) error {
+func writeDataToS3(store storeapi.Storage, fileName string, cols []*Column, data [][]string) (err error) {
 	ctx := context.Background()
 	writer, err := store.Create(ctx, fileName, nil)
 	if err != nil {
@@ -501,10 +486,15 @@ func writeDataToS3(store storeapi.Storage, fileName string, data [][]string) err
 	row := make([]string, colCnt)
 	for i := 0; i < rowCnt; i++ {
 		for j := 0; j < colCnt; j++ {
+			raw := data[j][i]
 			if *base64Encode {
-				row[j] = base64.StdEncoding.EncodeToString([]byte(data[j][i]))
+				row[j] = base64.StdEncoding.EncodeToString([]byte(raw))
 			} else {
-				row[j] = data[j][i]
+				if j < len(cols) && cols[j].Type == JSON && raw != nullVal {
+					row[j] = escapeJSONString(raw)
+				} else {
+					row[j] = raw
+				}
 			}
 		}
 		_, err = writer.Write(ctx, []byte(strings.Join(row, fieldSeparator)+"\n"))
@@ -669,9 +659,13 @@ func deleteAllFilesByPrefix(prefix string) {
 type Task struct {
 	id int
 	// [begin, end)
-	begin    int
-	end      int
-	curr     int
+	begin int
+	end   int
+	curr  int
+
+	// timestampEndUnix is captured once per task/file to keep timestamp generation consistent.
+	timestampEndUnix int64
+
 	cols     []*Column
 	fileName string
 	rng      *rand.Rand
@@ -681,6 +675,7 @@ type Task struct {
 type Result struct {
 	id       int
 	fileName string
+	cols     []*Column
 	values   [][]string
 }
 
@@ -689,6 +684,7 @@ func generatorWorker(rng *rand.Rand, tasksCh <-chan Task, resultsCh chan<- Resul
 	defer wg.Done()
 	for task := range tasksCh {
 		startTime := time.Now()
+		task.timestampEndUnix = startTime.Unix()
 		colNum := len(task.cols)
 		count := task.end - task.begin
 		// Try to get a [][]string slice from the pool
@@ -708,7 +704,7 @@ func generatorWorker(rng *rand.Rand, tasksCh <-chan Task, resultsCh chan<- Resul
 		}
 		log.Printf("Generator %d: Processed %s, primary key range [%d, %d), generated %d rows, elapsed time: %v",
 			workerID, task.fileName, task.begin, task.end, count, time.Since(startTime))
-		resultsCh <- Result{id: task.id, values: values, fileName: task.fileName}
+		resultsCh <- Result{id: task.id, values: values, fileName: task.fileName, cols: task.cols}
 	}
 }
 
@@ -732,7 +728,7 @@ func writerWorker(resultsCh <-chan Result, store storeapi.Storage, workerID int,
 					log.Fatal("Error writing output file:", err)
 				}
 			} else {
-				err = writeDataToS3(store, fileName, result.values)
+				err = writeDataToS3(store, fileName, result.cols, result.values)
 			}
 			if err == nil {
 				log.Printf("Writer %d: Wrote %s (%d rows), elapsed time: %v", workerID, fileName, rows, time.Since(startTime))
