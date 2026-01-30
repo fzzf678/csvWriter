@@ -1,13 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"math/rand"
@@ -182,7 +182,7 @@ func loadSchemaInfoFromCSV(filename string) []*Column {
 		if columns[i].Mean, err = strconv.ParseFloat(colInfo[7], 64); len(colInfo[7]) != 0 && err != nil {
 			panic(err)
 		}
-		if columns[i].StdDev, err = strconv.ParseFloat(colInfo[8], 64); len(colInfo[7]) != 0 && err != nil {
+		if columns[i].StdDev, err = strconv.ParseFloat(colInfo[8], 64); len(colInfo[8]) != 0 && err != nil {
 			panic(err)
 		}
 		checkColumnInfoLegality(columns[i])
@@ -207,23 +207,13 @@ func checkColumnInfoLegality(col *Column) {
 
 // Generate data for each column
 func (t *Task) generateValueByCol(rng *rand.Rand, col *Column, num int, res []string) {
-	switch col.Type {
-	case STRING:
-		col.generateString(rng, num, res)
-	case BOOLEAN:
-		col.generateBoolean(rng, num, res)
-	case INT:
-		col.generateInt(rng, num, res, t.begin)
-	case BIGINT:
-		col.generateBigint(rng, num, res, t.begin, t.end)
-	case DECIMAL:
-		col.generateDecimal(rng, num, res)
-	case TIMESTAMP:
-		col.generateTimestamp(rng, num, res)
-	case JSON:
-		col.generateJSONObject(rng, num, res)
-	default:
-		log.Printf("Unsupported type: %s", col.Type)
+	for i := 0; i < num; i++ {
+		rowID := t.begin + i
+		value, err := col.rawValueString(rng, rowID, t.timestampEndUnix)
+		if err != nil {
+			log.Fatalf("failed to generate value for col %q (type=%s) rowID=%d: %v", col.Name, col.Type, rowID, err)
+		}
+		res[i] = value
 	}
 }
 
@@ -411,12 +401,7 @@ func (c *Column) generateJSONObject(rng *rand.Rand, num int, res []string) {
 		if c.canThisValNull(rng) {
 			res[i] = nullVal
 		} else {
-			r := generateJSON(rng)
-			if *localPath == "" {
-				res[i] = escapeJSONString(r)
-			} else {
-				res[i] = r
-			}
+			res[i] = generateJSON(rng)
 		}
 	}
 }
@@ -458,6 +443,7 @@ func createExternalStorage() storeapi.Storage {
 		SecretAccessKey: *s3SecretKey,
 		Provider:        *s3Provider,
 		Endpoint:        *s3Endpoint,
+		RoleARN:         *s3RoleARN,
 	}}
 	s, err := objstore.ParseBackend(*s3Path, &op)
 	if err != nil {
@@ -471,28 +457,51 @@ func createExternalStorage() storeapi.Storage {
 }
 
 // Write data to S3 with retry (column-oriented)
-func writeDataToS3(store storeapi.Storage, fileName string, data [][]string) error {
-	writer, err := store.Create(context.Background(), fileName, nil)
+func writeDataToS3(store storeapi.Storage, fileName string, cols []*Column, data [][]string) (err error) {
+	ctx := context.Background()
+	writer, err := store.Create(ctx, fileName, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create S3 file: %w", err)
 	}
-	defer writer.Close(context.Background())
+	defer func() {
+		closeErr := writer.Close(ctx)
+		if err != nil {
+			if closeErr != nil {
+				log.Printf("failed to close S3 writer for %s after write error: %v", fileName, closeErr)
+			}
+			return
+		}
+		if closeErr != nil {
+			log.Printf("failed to close S3 writer for %s, deleting file", fileName)
+			if deleteErr := store.DeleteFile(ctx, fileName); deleteErr != nil {
+				err = fmt.Errorf("failed to close S3 writer: %v (also failed to delete file: %v)", closeErr, deleteErr)
+				return
+			}
+			err = fmt.Errorf("failed to close S3 writer: %w", closeErr)
+		}
+	}()
 
 	rowCnt := len(data[0])
 	colCnt := len(data)
 	row := make([]string, colCnt)
 	for i := 0; i < rowCnt; i++ {
 		for j := 0; j < colCnt; j++ {
+			raw := data[j][i]
 			if *base64Encode {
-				row[j] = base64.StdEncoding.EncodeToString([]byte(data[j][i]))
+				row[j] = base64.StdEncoding.EncodeToString([]byte(raw))
 			} else {
-				row[j] = data[j][i]
+				if j < len(cols) && cols[j].Type == JSON && raw != nullVal {
+					row[j] = escapeJSONString(raw)
+				} else {
+					row[j] = raw
+				}
 			}
 		}
-		_, err = writer.Write(context.Background(), []byte(strings.Join(row, fieldSeparator)+"\n"))
+		_, err = writer.Write(ctx, []byte(strings.Join(row, fieldSeparator)+"\n"))
 		if err != nil {
 			log.Printf("Write to S3 failed, deleting file: %s", fileName)
-			store.DeleteFile(context.Background(), fileName) // Delete the file if write fails
+			// Delete the file if write fails (best effort).
+			_ = store.DeleteFile(ctx, fileName)
 			return fmt.Errorf("failed to write to S3: %w", err)
 		}
 	}
@@ -507,18 +516,21 @@ func deleteFileByName(fileName string) {
 	}
 }
 
-func showFiles() {
+func showFiles() error {
 	store := createExternalStorage()
 	dirSize := 0.0
 	dirFileNum := 0
-	store.WalkDir(context.Background(), &storeapi.WalkOption{SkipSubDir: true}, func(path string, size int64) error {
+	if err := store.WalkDir(context.Background(), &storeapi.WalkOption{SkipSubDir: true}, func(path string, size int64) error {
 		fSize := float64(size) / 1024 / 1024
 		log.Printf("Name: %s, Size: %d, Size (MiB): %f", path, size, fSize)
 		dirSize += fSize
 		dirFileNum++
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 	log.Printf("Total file Num: %d  Total size: %.2f MiB, %.2f GiB, %.2f TiB", dirFileNum, dirSize, dirSize/1024, dirSize/1024/1024)
+	return nil
 }
 
 func glanceFiles(fileName string) {
@@ -527,9 +539,13 @@ func glanceFiles(fileName string) {
 	if err != nil {
 		panic(fmt.Errorf("failed to open file %s: %v", fileName, err))
 	}
+	defer r.Close()
 	b := make([]byte, 1*units.MiB)
-	r.Read(b)
-	fmt.Println(string(b))
+	n, err := r.Read(b)
+	if err != nil && err != io.EOF {
+		panic(fmt.Errorf("failed to read file %s: %v", fileName, err))
+	}
+	fmt.Println(string(b[:n]))
 }
 
 func fetchFileFromS3(fileName string) {
@@ -537,94 +553,119 @@ func fetchFileFromS3(fileName string) {
 	if exist, _ := store.FileExists(context.Background(), fileName); !exist {
 		panic(fmt.Errorf("file %s does not exist", fileName))
 	}
-	res, err := store.ReadFile(context.Background(), fileName)
+	r, err := store.Open(context.Background(), fileName, nil)
 	if err != nil {
-		panic(err)
+		panic(fmt.Errorf("failed to open file %s: %v", fileName, err))
 	}
+	defer r.Close()
 
-	// Open the local file where the content will be written
-	file, err := os.Create(filepath.Join(*localPath, fileName))
+	outPath := filepath.Join(*localPath, fileName)
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		panic(fmt.Errorf("failed to create directory for %s: %v", outPath, err))
+	}
+	file, err := os.Create(outPath)
 	if err != nil {
-		panic(fmt.Errorf("failed to create file %s: %v", *localPath, err))
+		panic(fmt.Errorf("failed to create file %s: %v", outPath, err))
 	}
-	defer file.Close() // Ensure the file is closed after writing
+	defer file.Close()
 
-	// Assuming res contains CSV data as []byte, convert it to string and split by newlines
-	// (In case the file is already in CSV format, or you need to write CSV data)
-	reader := csv.NewReader(bytes.NewReader(res)) // Read the []byte as CSV
-	writer := csv.NewWriter(file)                 // Prepare to write to file
-	reader.Comma = fieldDelimiter
-	writer.Comma = fieldDelimiter
-	defer writer.Flush() // Ensure data is written to file
-
-	// Read the CSV records from the []byte data
-	for {
-		record, err := reader.Read()
-		if err != nil {
-			if err.Error() != "EOF" {
-				panic(fmt.Errorf("failed to read CSV from file: %v", err))
-			}
-			break
-		}
-		// Write the CSV record to the file
-		if err := writer.Write(record); err != nil {
-			panic(fmt.Errorf("failed to write CSV row: %v", err))
-		}
+	if _, err := io.Copy(file, r); err != nil {
+		panic(fmt.Errorf("failed to write file %s: %v", outPath, err))
 	}
-	fmt.Printf("File %s successfully fetched and written to %s\n", fileName, *localPath)
+	fmt.Printf("File %s successfully fetched and written to %s\n", fileName, outPath)
 }
 
 // Write CSV to local disk (column-oriented)
 func writeCSVToLocalDisk(filename string, data [][]string) error {
+	if len(data) == 0 {
+		return fmt.Errorf("no columns to write")
+	}
+	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+		return err
+	}
 	file, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 
 	writer := csv.NewWriter(file)
 	writer.Comma = fieldDelimiter
-	defer writer.Flush()
 
 	// Write CSV data
-	for i := 0; i < len(data[0]); i++ {
-		row := []string{}
-		for j := 0; j < len(data); j++ {
+	rowCnt := len(data[0])
+	colCnt := len(data)
+	row := make([]string, colCnt)
+	for i := 0; i < rowCnt; i++ {
+		for j := 0; j < colCnt; j++ {
 			if *base64Encode {
-				row = append(row, base64.StdEncoding.EncodeToString([]byte(data[j][i])))
+				row[j] = base64.StdEncoding.EncodeToString([]byte(data[j][i]))
 			} else {
-				row = append(row, data[j][i])
+				row[j] = data[j][i]
 			}
 		}
-		writer.Write(row)
+		if err := writer.Write(row); err != nil {
+			_ = file.Close()
+			return err
+		}
 	}
-	return nil
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func deleteAllFilesByPrefix(prefix string) {
-	var fileNames []string
 	store := createExternalStorage()
-	store.WalkDir(context.Background(), &storeapi.WalkOption{SkipSubDir: true}, func(path string, size int64) error {
-		if strings.HasPrefix(path, prefix) {
-			fileNames = append(fileNames, path)
+	ctx := context.Background()
+
+	const batchSize = 1000
+	batch := make([]string, 0, batchSize)
+	deleted := 0
+
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := store.DeleteFiles(ctx, batch); err != nil {
+			return err
+		}
+		deleted += len(batch)
+		batch = batch[:0]
+		return nil
+	}
+
+	err := store.WalkDir(ctx, &storeapi.WalkOption{SkipSubDir: true, ObjPrefix: prefix}, func(path string, size int64) error {
+		if !strings.HasPrefix(path, prefix) {
+			return nil
+		}
+		batch = append(batch, path)
+		if len(batch) >= batchSize {
+			return flush()
 		}
 		return nil
 	})
-	for _, fileName := range fileNames {
-		err := store.DeleteFile(context.Background(), fileName)
-		if err != nil {
-			panic(err)
-		}
+	if err != nil {
+		panic(err)
 	}
+	if err := flush(); err != nil {
+		panic(err)
+	}
+	log.Printf("Deleted %d files with prefix %q", deleted, prefix)
 }
 
 // Task represents a task with a [begin, end) range indicating the number of rows to generate
 type Task struct {
 	id int
 	// [begin, end)
-	begin    int
-	end      int
-	curr     int
+	begin int
+	end   int
+	curr  int
+
+	// timestampEndUnix is captured once per task/file to keep timestamp generation consistent.
+	timestampEndUnix int64
+
 	cols     []*Column
 	fileName string
 	rng      *rand.Rand
@@ -634,6 +675,7 @@ type Task struct {
 type Result struct {
 	id       int
 	fileName string
+	cols     []*Column
 	values   [][]string
 }
 
@@ -642,6 +684,7 @@ func generatorWorker(rng *rand.Rand, tasksCh <-chan Task, resultsCh chan<- Resul
 	defer wg.Done()
 	for task := range tasksCh {
 		startTime := time.Now()
+		task.timestampEndUnix = startTime.Unix()
 		colNum := len(task.cols)
 		count := task.end - task.begin
 		// Try to get a [][]string slice from the pool
@@ -661,7 +704,7 @@ func generatorWorker(rng *rand.Rand, tasksCh <-chan Task, resultsCh chan<- Resul
 		}
 		log.Printf("Generator %d: Processed %s, primary key range [%d, %d), generated %d rows, elapsed time: %v",
 			workerID, task.fileName, task.begin, task.end, count, time.Since(startTime))
-		resultsCh <- Result{id: task.id, values: values, fileName: task.fileName}
+		resultsCh <- Result{id: task.id, values: values, fileName: task.fileName, cols: task.cols}
 	}
 }
 
@@ -670,21 +713,25 @@ func writerWorker(resultsCh <-chan Result, store storeapi.Storage, workerID int,
 	defer wg.Done()
 	var err error
 	for result := range resultsCh {
+		rows := 0
+		if len(result.values) > 0 {
+			rows = len(result.values[0])
+		}
 		success := false
 		fileName := result.fileName
 		// Retry mechanism
 		for attempt := 1; attempt <= maxRetries; attempt++ {
 			startTime := time.Now()
 			if *localPath != "" {
-				err = writeCSVToLocalDisk(*localPath+fileName, result.values)
+				err = writeCSVToLocalDisk(filepath.Join(*localPath, fileName), result.values)
 				if err != nil {
 					log.Fatal("Error writing output file:", err)
 				}
 			} else {
-				err = writeDataToS3(store, fileName, result.values)
+				err = writeDataToS3(store, fileName, result.cols, result.values)
 			}
 			if err == nil {
-				log.Printf("Writer %d: Wrote %s (%d rows), elapsed time: %v", workerID, fileName, len(result.values[0]), time.Since(startTime))
+				log.Printf("Writer %d: Wrote %s (%d rows), elapsed time: %v", workerID, fileName, rows, time.Since(startTime))
 				success = true
 				break
 			}
@@ -697,7 +744,7 @@ func writerWorker(resultsCh <-chan Result, store storeapi.Storage, workerID int,
 			time.Sleep(waitTime + time.Duration(rand.Intn(500))*time.Millisecond)
 		}
 		if !success {
-			log.Printf("Writer %d: Final write failed for %s (%d rows)", workerID, fileName, len(result.values))
+			log.Fatalf("Writer %d: Final write failed for %s (%d rows): %v", workerID, fileName, rows, err)
 		}
 		// Return the used slice to the pool for reuse
 		pool.Put(result.values)
@@ -749,8 +796,8 @@ func generateData() {
 	log.Printf("Total tasks: %d, each task generates at most %d rows", taskCount, *rowNumPerFile)
 
 	// Create tasks and results channels
-	tasksCh := make(chan Task, *generatorNum+1)
-	resultsCh := make(chan Result, *writerNum+1)
+	tasksCh := make(chan Task, 1)
+	resultsCh := make(chan Result, 1)
 
 	// Create a sync.Pool for reusing [][]string slices, initial capacity equals number of columns
 	pool := &sync.Pool{
@@ -774,24 +821,9 @@ func generateData() {
 
 	var wgWriter sync.WaitGroup
 	// Start writer workers
-	op := objstore.BackendOptions{S3: s3like.S3BackendOptions{
-		Region:          *s3Region,
-		AccessKey:       *s3AccessKey,
-		SecretAccessKey: *s3SecretKey,
-		Provider:        *s3Provider,
-		Endpoint:        *s3Endpoint,
-		RoleARN:         *s3RoleARN,
-	}}
-	s, err := objstore.ParseBackend(*s3Path, &op)
-	if err != nil {
-		panic(err)
-	}
 	var store storeapi.Storage
 	if *localPath == "" {
-		store, err = objstore.NewWithDefaultOpt(context.Background(), s)
-		if err != nil {
-			panic(err)
-		}
+		store = createExternalStorage()
 	}
 	for i := 0; i < *writerNum; i++ {
 		wgWriter.Add(1)
@@ -828,7 +860,9 @@ func generateData() {
 	wgWriter.Wait()
 	log.Printf("Write completed, total time: %v", time.Since(startTime))
 	if *localPath == "" {
-		showFiles()
+		if err := showFiles(); err != nil {
+			log.Printf("Failed to list files: %v", err)
+		}
 	}
 
 	if *deleteAfterGen {
@@ -849,7 +883,9 @@ func main() {
 
 	// List files in S3 directory
 	if *showFile {
-		showFiles()
+		if err := showFiles(); err != nil {
+			log.Fatal(err)
+		}
 		return
 	}
 
@@ -880,6 +916,9 @@ func main() {
 		return
 	}
 	if *useProcessor {
+		if *localPath != "" {
+			log.Fatal("useProcessor mode does not support localPath; unset localPath or disable useProcessor")
+		}
 		genWithTaskProcessor()
 		return
 	}

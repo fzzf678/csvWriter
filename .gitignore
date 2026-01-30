@@ -56,3 +56,4 @@ go.work.sum
 .cache
 .trae
 /data/
+*.tar.gz

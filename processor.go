@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
-	"github.com/pingcap/tidb/pkg/objstore"
 	"github.com/pingcap/tidb/pkg/objstore/objectio"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/util"
@@ -35,25 +34,21 @@ func genWithTaskProcessor() {
 	taskCount := (rowCount + *rowNumPerFile - 1) / *rowNumPerFile
 	log.Printf("Total tasks: %d, each task generates at most %d rows", taskCount, *rowNumPerFile)
 
-	u, err := objstore.ParseRawURL(*s3Path)
-	if err != nil {
-		panic(err)
-	}
-	s, err := objstore.ParseBackendFromURL(u, nil)
-	if err != nil {
-		panic(err)
-	}
-	store, err := objstore.NewWithDefaultOpt(context.Background(), s)
-	if err != nil {
-		log.Fatalf("Failed to create storage: %v", err)
-	}
+	store := createExternalStorage()
 
 	eg, ctx := util.NewErrorGroupWithRecoverWithCtx(context.Background())
 	// Start generator workers
 	processors := make([]*processor, 0, *generatorNum)
 	var doneProcessors atomic.Int32
 	allProcessorDone := make(chan struct{})
-	tasksCh := make(chan Task, taskCount)
+	taskQueueSize := *generatorNum * 2
+	if taskQueueSize < 1 {
+		taskQueueSize = 1
+	}
+	if taskQueueSize > 1024 {
+		taskQueueSize = 1024
+	}
+	tasksCh := make(chan Task, taskQueueSize)
 	for i := 0; i < *generatorNum; i++ {
 		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 		p := &processor{
@@ -184,6 +179,7 @@ func (p *processor) generate(ctx context.Context, tasksCh <-chan Task) error {
 		if !ok {
 			break
 		}
+		task.timestampEndUnix = time.Now().Unix()
 		for task.hasMoreRows() {
 			sb := &strings.Builder{}
 			for sb.Len() < 4*units.MiB && task.hasMoreRows() {
