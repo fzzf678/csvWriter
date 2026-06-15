@@ -1,10 +1,24 @@
 name,type,is_pk,is_unique,min_len,max_len,null_ratio,mean,std_dev,order
-a,string,,1,40,40,,,,
-b,boolean,,,,,,,,
-c,int,,,,,,,,
-d,bigint,,,,,,,,
-f,decimal,,,,,,,,
-g,timestamp,,,,,,,,
-h,json,,,,,,,,
-a,string,,1,400000,400000,,,,
-c,int,,,,,,,,total random
+pk_int,int,1,,,,,,,
+uk_int_nullable,int,,1,,,20,,,
+int_uniform_nullable,int,,,,,5,,,
+int_normal,int,,,,,0,100,15,
+pk_bigint,bigint,1,,,,,,,
+uk_bigint_nullable,bigint,,1,,,20,,,
+bigint_random_nullable,bigint,,,,,5,,,
+bigint_total_ordered,bigint,,,,,0,,,total ordered
+bigint_partial_ordered_nullable,bigint,,,,,10,,,partial ordered
+bigint_total_random_nullable,bigint,,,,,10,,,total random
+bool_no_null,boolean,,,,,0,,,
+bool_all_null,boolean,,,,,100,,,
+dec_no_null,decimal,,,,,0,,,
+dec_nullable,decimal,,,,,30,,,
+str_pk_uuid,string,1,,36,36,,,,
+str_uk_uuid_nullable,string,,1,36,36,30,,,
+str_uk_varlen,string,,1,40,80,0,,,
+str_varlen_nullable,string,,,1,32,10,,,
+str_empty,string,,,0,0,0,,,
+ts_no_null,timestamp,,,,,0,,,
+ts_nullable,timestamp,,,,,30,,,
+json_no_null,json,,,,,0,,,
+json_nullable,json,,,,,30,,,

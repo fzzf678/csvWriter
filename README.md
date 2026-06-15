@@ -25,7 +25,7 @@ Currently, this tool supports the following data types:
 -	int: The value range is consistent with int32
 -	bigint: The value range is consistent with int64
 -	boolean: The value is `0` or `1`
--	decimal: The total number of decimal digits is `27`, The number of digits after the decimal point is `9`
+-	decimal: Format is `<integer>.<fraction>`, integer part is in `[0, 1e18)`, fraction has `10` digits (zero-padded)
 -	string: The character scope is [a-zA-Z0-9]
 -	timestamp: Time from `1971-1-1 00:00:00` to now
 -	json: The marshal result of struct `UserInfo`
